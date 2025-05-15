@@ -247,6 +247,13 @@ std::optional<std::vector<std::pair<uint64_t, bool>>> CDRMRenderer::getModsForFo
     return result;
 }
 
+void CDRMRenderer::useProgram(GLuint prog) {
+    if (m_currentProgram == prog)
+        return;
+
+    GLCALL(glUseProgram(prog));
+}
+
 bool CDRMRenderer::initDRMFormats() {
     std::vector<EGLint> formats;
 
@@ -482,6 +489,7 @@ void CDRMRenderer::initResources() {
     gl.shader.posAttrib = glGetAttribLocation(gl.shader.program, "pos");
     gl.shader.texAttrib = glGetAttribLocation(gl.shader.program, "texcoord");
     gl.shader.tex       = glGetUniformLocation(gl.shader.program, "tex");
+    gl.shader.createVao();
 
     gl.shaderExt.program = createProgram(VERT_SRC, FRAG_SRC_EXT);
     if (gl.shaderExt.program == 0)
@@ -491,6 +499,7 @@ void CDRMRenderer::initResources() {
     gl.shaderExt.posAttrib = glGetAttribLocation(gl.shaderExt.program, "pos");
     gl.shaderExt.texAttrib = glGetAttribLocation(gl.shaderExt.program, "texcoord");
     gl.shaderExt.tex       = glGetUniformLocation(gl.shaderExt.program, "tex");
+    gl.shaderExt.createVao();
 }
 
 SP<CDRMRenderer> CDRMRenderer::attempt(SP<CBackend> backend_, int drmFD, bool GLES2) {
@@ -732,13 +741,6 @@ void             CDRMRenderer::readBuffer(Hyprutils::Memory::CSharedPointer<IBuf
 
     GLCALL(glBindFramebuffer(GL_FRAMEBUFFER, 0));
 }
-
-inline const float fullVerts[] = {
-    1, 0, // top right
-    0, 0, // top left
-    1, 1, // bottom right
-    0, 1, // bottom left
-};
 
 void CDRMRenderer::waitOnSync(int fd) {
     TRACE(backend->log(AQ_LOG_TRACE, std::format("EGL (waitOnSync): attempting to wait on fd {}", fd)));
@@ -1011,7 +1013,7 @@ CDRMRenderer::SBlitResult CDRMRenderer::blit(SP<IBuffer> from, SP<IBuffer> to, S
     if (!intermediateBuf.empty())
         GLCALL(glTexImage2D(fromTex.target, 0, PIXEL_BUFFER_FORMAT, fromDma.size.x, fromDma.size.y, 0, PIXEL_BUFFER_FORMAT, GL_UNSIGNED_BYTE, intermediateBuf.data()));
 
-    GLCALL(glUseProgram(SHADER.program));
+    useProgram(SHADER.program);
     GLCALL(glDisable(GL_BLEND));
     GLCALL(glDisable(GL_SCISSOR_TEST));
 
@@ -1020,16 +1022,11 @@ CDRMRenderer::SBlitResult CDRMRenderer::blit(SP<IBuffer> from, SP<IBuffer> to, S
 
     GLCALL(glUniform1i(SHADER.tex, 0));
 
-    GLCALL(glVertexAttribPointer(SHADER.posAttrib, 2, GL_FLOAT, GL_FALSE, 0, fullVerts));
-    GLCALL(glVertexAttribPointer(SHADER.texAttrib, 2, GL_FLOAT, GL_FALSE, 0, fullVerts));
-
-    GLCALL(glEnableVertexAttribArray(SHADER.posAttrib));
-    GLCALL(glEnableVertexAttribArray(SHADER.texAttrib));
+    GLCALL(glBindVertexArray(SHADER.shaderVao));
 
     GLCALL(glDrawArrays(GL_TRIANGLE_STRIP, 0, 4));
 
-    GLCALL(glDisableVertexAttribArray(SHADER.posAttrib));
-    GLCALL(glDisableVertexAttribArray(SHADER.texAttrib));
+    GLCALL(glBindVertexArray(0));
 
     GLCALL(glBindTexture(fromTex.target, 0));
 
