@@ -29,11 +29,16 @@ namespace Aquamarine {
         CDRMRendererBufferAttachment(Hyprutils::Memory::CWeakPointer<CDRMRenderer> renderer_, Hyprutils::Memory::CSharedPointer<IBuffer> buffer, EGLImageKHR image, GLuint fbo_,
                                      GLuint rbo_, SGLTex tex, std::vector<uint8_t> intermediateBuf_);
         virtual ~CDRMRendererBufferAttachment() {
-            ;
+            if (pbo)
+                glDeleteBuffers(1, &pbo);
+            if (fbo)
+                glDeleteFramebuffers(1, &fbo);
+            if (rbo)
+                glDeleteRenderbuffers(1, &rbo);
         }
 
         EGLImageKHR                                   eglImage = nullptr;
-        GLuint                                        fbo = 0, rbo = 0;
+        GLuint                                        fbo = 0, rbo = 0, pbo = 0;
         SGLTex                                        tex;
         Hyprutils::Signal::CHyprSignalListener        bufferDestroy;
         std::vector<uint8_t>                          intermediateBuf;

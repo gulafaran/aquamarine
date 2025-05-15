@@ -713,7 +713,8 @@ void             CDRMRenderer::readBuffer(Hyprutils::Memory::CSharedPointer<IBuf
         buf->attachments.add(att);
     }
 
-    auto dma = buf->dmabuf();
+    const auto& dma = buf->dmabuf();
+
     if (!att->eglImage) {
         att->eglImage = createEGLImage(dma);
         if (att->eglImage == EGL_NO_IMAGE_KHR) {
@@ -734,11 +735,28 @@ void             CDRMRenderer::readBuffer(Hyprutils::Memory::CSharedPointer<IBuf
             backend->log(AQ_LOG_ERROR, std::format("EGL (readBuffer): glCheckFramebufferStatus failed: {}", glGetError()));
             return;
         }
+
+        // Allocate persistent PBO only once
+        GLCALL(glGenBuffers(1, &att->pbo));
+        GLCALL(glBindBuffer(GL_PIXEL_PACK_BUFFER, att->pbo));
+        GLCALL(glBufferData(GL_PIXEL_PACK_BUFFER, out.size(), nullptr, GL_STREAM_READ));
+        GLCALL(glBindBuffer(GL_PIXEL_PACK_BUFFER, 0));
     }
 
     GLCALL(glBindFramebuffer(GL_FRAMEBUFFER, att->fbo));
-    GLCALL(proc.glReadnPixelsEXT(0, 0, dma.size.x, dma.size.y, GL_RGBA, GL_UNSIGNED_BYTE, out.size(), out.data()));
+    GLCALL(glBindBuffer(GL_PIXEL_PACK_BUFFER, att->pbo));
+    GLCALL(glPixelStorei(GL_PACK_ALIGNMENT, 1));
+    GLCALL(glReadPixels(0, 0, dma.size.x, dma.size.y, GL_RGBA, GL_UNSIGNED_BYTE, nullptr));
 
+    void* ptr = glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, out.size(), GL_MAP_READ_BIT);
+    if (ptr) {
+        std::memcpy(out.data(), ptr, out.size());
+        GLCALL(glUnmapBuffer(GL_PIXEL_PACK_BUFFER));
+    } else {
+        backend->log(AQ_LOG_ERROR, "Failed to map PBO");
+    }
+
+    GLCALL(glBindBuffer(GL_PIXEL_PACK_BUFFER, 0));
     GLCALL(glBindFramebuffer(GL_FRAMEBUFFER, 0));
 }
 
@@ -921,7 +939,7 @@ CDRMRenderer::SBlitResult CDRMRenderer::blit(SP<IBuffer> from, SP<IBuffer> to, S
 
     EGLImageKHR rboImage = nullptr;
     GLuint      rboID = 0, fboID = 0;
-    auto        toDma = to->dmabuf();
+    const auto& toDma = to->dmabuf();
 
     if (!verifyDestinationDMABUF(toDma)) {
         backend->log(AQ_LOG_ERROR, "EGL (blit): failed to blit: destination dmabuf unsupported");
