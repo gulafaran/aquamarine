@@ -669,7 +669,7 @@ EGLImageKHR CDRMRenderer::createEGLImage(const SDMABUFAttrs& attrs) {
     return image;
 }
 
-SGLTex CDRMRenderer::glTex(Hyprutils::Memory::CSharedPointer<IBuffer> buffa) {
+SP<SGLTex> CDRMRenderer::glTex(Hyprutils::Memory::CSharedPointer<IBuffer> buffa) {
     SGLTex     tex;
 
     const auto dma = buffa->dmabuf();
@@ -677,7 +677,7 @@ SGLTex CDRMRenderer::glTex(Hyprutils::Memory::CSharedPointer<IBuffer> buffa) {
     tex.image = createEGLImage(dma);
     if (tex.image == EGL_NO_IMAGE_KHR) {
         backend->log(AQ_LOG_ERROR, std::format("EGL (glTex): createEGLImage failed: {}", eglGetError()));
-        return tex;
+        return makeShared<SGLTex>(tex);
     }
 
     bool external = false;
@@ -700,7 +700,7 @@ SGLTex CDRMRenderer::glTex(Hyprutils::Memory::CSharedPointer<IBuffer> buffa) {
     GLCALL(proc.glEGLImageTargetTexture2DOES(tex.target, tex.image));
     GLCALL(glBindTexture(tex.target, 0));
 
-    return tex;
+    return makeShared<SGLTex>(tex);
 }
 
 constexpr GLenum PIXEL_BUFFER_FORMAT = GL_RGBA;
@@ -709,7 +709,7 @@ void             CDRMRenderer::readBuffer(Hyprutils::Memory::CSharedPointer<IBuf
     CEglContextGuard eglContext(*this);
     auto             att = buf->attachments.get<CDRMRendererBufferAttachment>();
     if (!att) {
-        att = makeShared<CDRMRendererBufferAttachment>(self, buf, nullptr, 0, 0, SGLTex{}, std::vector<uint8_t>());
+        att = makeShared<CDRMRendererBufferAttachment>(self, buf, nullptr, 0, 0, makeShared<SGLTex>(SGLTex()), std::vector<uint8_t>());
         buf->attachments.add(att);
     }
 
@@ -896,7 +896,7 @@ CDRMRenderer::SBlitResult CDRMRenderer::blit(SP<IBuffer> from, SP<IBuffer> to, S
     // both from and to have the same AQ_ATTACHMENT_DRM_RENDERER_DATA.
     // Those buffers always come from different swapchains, so it's OK.
 
-    SGLTex             fromTex;
+    SP<SGLTex>         fromTex;
     auto               fromDma = from->dmabuf();
     std::span<uint8_t> intermediateBuf;
     {
@@ -907,20 +907,20 @@ CDRMRenderer::SBlitResult CDRMRenderer::blit(SP<IBuffer> from, SP<IBuffer> to, S
             intermediateBuf = attachment->intermediateBuf;
         }
 
-        if (!fromTex.image && intermediateBuf.empty()) {
+        if (!fromTex && intermediateBuf.empty()) {
             backend->log(AQ_LOG_DEBUG, "EGL (blit): No attachment in from, creating a new image");
             fromTex = glTex(from);
 
             attachment = makeShared<CDRMRendererBufferAttachment>(self, from, nullptr, 0, 0, fromTex, std::vector<uint8_t>());
             from->attachments.add(attachment);
 
-            if (!fromTex.image && primaryRenderer) {
+            if (!fromTex->image && primaryRenderer) {
                 backend->log(AQ_LOG_DEBUG, "EGL (blit): Failed to create image from source buffer directly, allocating intermediate buffer");
                 static_assert(PIXEL_BUFFER_FORMAT == GL_RGBA); // If the pixel buffer format changes, the below size calculation probably needs to as well.
                 attachment->intermediateBuf.resize(fromDma.size.x * fromDma.size.y * 4);
                 intermediateBuf = attachment->intermediateBuf;
-                fromTex.target  = GL_TEXTURE_2D;
-                GLCALL(glGenTextures(1, &fromTex.texid));
+                fromTex->target = GL_TEXTURE_2D;
+                GLCALL(glGenTextures(1, &fromTex->texid));
             }
         }
 
@@ -931,8 +931,8 @@ CDRMRenderer::SBlitResult CDRMRenderer::blit(SP<IBuffer> from, SP<IBuffer> to, S
     }
 
     TRACE(backend->log(AQ_LOG_TRACE,
-                       std::format("EGL (blit): fromTex id {}, image 0x{:x}, target {}", fromTex.texid, (uintptr_t)fromTex.image,
-                                   fromTex.target == GL_TEXTURE_2D ? "GL_TEXTURE_2D" : "GL_TEXTURE_EXTERNAL_OES")));
+                       std::format("EGL (blit): fromTex id {}, image 0x{:x}, target {}", fromTex->texid, (uintptr_t)fromTex->image,
+                                   fromTex->target == GL_TEXTURE_2D ? "GL_TEXTURE_2D" : "GL_TEXTURE_EXTERNAL_OES")));
 
     // then, get a rbo from our to buffer
     // if it has an attachment, use that
@@ -978,7 +978,7 @@ CDRMRenderer::SBlitResult CDRMRenderer::blit(SP<IBuffer> from, SP<IBuffer> to, S
                 return {};
             }
 
-            to->attachments.add(makeShared<CDRMRendererBufferAttachment>(self, to, rboImage, fboID, rboID, SGLTex{}, std::vector<uint8_t>()));
+            to->attachments.add(makeShared<CDRMRendererBufferAttachment>(self, to, rboImage, fboID, rboID, makeShared<SGLTex>(SGLTex()), std::vector<uint8_t>()));
         }
     }
 
@@ -1002,7 +1002,7 @@ CDRMRenderer::SBlitResult CDRMRenderer::blit(SP<IBuffer> from, SP<IBuffer> to, S
     float monitorProj[9];
     matrixIdentity(base);
 
-    auto& SHADER = fromTex.target == GL_TEXTURE_2D ? gl.shader : gl.shaderExt;
+    auto& SHADER = fromTex->target == GL_TEXTURE_2D ? gl.shader : gl.shaderExt;
 
     // KMS uses flipped y, we have to do FLIPPED_180
     matrixTranslate(base, toDma.size.x / 2.0, toDma.size.y / 2.0);
@@ -1019,13 +1019,18 @@ CDRMRenderer::SBlitResult CDRMRenderer::blit(SP<IBuffer> from, SP<IBuffer> to, S
     GLCALL(glViewport(0, 0, toDma.size.x, toDma.size.y));
 
     GLCALL(glActiveTexture(GL_TEXTURE0));
-    GLCALL(glBindTexture(fromTex.target, fromTex.texid));
+    GLCALL(glBindTexture(fromTex->target, fromTex->texid));
 
-    GLCALL(glTexParameteri(fromTex.target, GL_TEXTURE_MAG_FILTER, GL_NEAREST));
-    GLCALL(glTexParameteri(fromTex.target, GL_TEXTURE_MIN_FILTER, GL_NEAREST));
+    GLCALL(glTexParameteri(fromTex->target, GL_TEXTURE_MAG_FILTER, GL_NEAREST));
+    GLCALL(glTexParameteri(fromTex->target, GL_TEXTURE_MIN_FILTER, GL_NEAREST));
 
-    if (!intermediateBuf.empty())
-        GLCALL(glTexImage2D(fromTex.target, 0, PIXEL_BUFFER_FORMAT, fromDma.size.x, fromDma.size.y, 0, PIXEL_BUFFER_FORMAT, GL_UNSIGNED_BYTE, intermediateBuf.data()));
+    if (!intermediateBuf.empty()) {
+        if (fromTex->needsAllocation) {
+            GLCALL(glTexImage2D(fromTex->target, 0, PIXEL_BUFFER_FORMAT, fromDma.size.x, fromDma.size.y, 0, PIXEL_BUFFER_FORMAT, GL_UNSIGNED_BYTE, intermediateBuf.data()));
+            fromTex->needsAllocation = false;
+        } else
+            GLCALL(glTexSubImage2D(fromTex->target, 0, 0, 0, fromDma.size.x, fromDma.size.y, PIXEL_BUFFER_FORMAT, GL_UNSIGNED_BYTE, intermediateBuf.data()));
+    }
 
     useProgram(SHADER.program);
     GLCALL(glDisable(GL_BLEND));
@@ -1042,7 +1047,7 @@ CDRMRenderer::SBlitResult CDRMRenderer::blit(SP<IBuffer> from, SP<IBuffer> to, S
 
     GLCALL(glBindVertexArray(0));
 
-    GLCALL(glBindTexture(fromTex.target, 0));
+    GLCALL(glBindTexture(fromTex->target, 0));
 
     // get an explicit sync fd for the secondary gpu.
     // when we pass buffers between gpus we should always use explicit sync,
@@ -1061,16 +1066,16 @@ void CDRMRenderer::onBufferAttachmentDrop(CDRMRendererBufferAttachment* attachme
     TRACE(backend->log(AQ_LOG_TRACE,
                        std::format("EGL (onBufferAttachmentDrop): dropping fbo {} rbo {} image 0x{:x}", attachment->fbo, attachment->rbo, (uintptr_t)attachment->eglImage)));
 
-    if (attachment->tex.texid)
-        GLCALL(glDeleteTextures(1, &attachment->tex.texid));
+    if (attachment->tex->texid)
+        GLCALL(glDeleteTextures(1, &attachment->tex->texid));
     if (attachment->rbo)
         GLCALL(glDeleteRenderbuffers(1, &attachment->rbo));
     if (attachment->fbo)
         GLCALL(glDeleteFramebuffers(1, &attachment->fbo));
     if (attachment->eglImage)
         proc.eglDestroyImageKHR(egl.display, attachment->eglImage);
-    if (attachment->tex.image)
-        proc.eglDestroyImageKHR(egl.display, attachment->tex.image);
+    if (attachment->tex->image)
+        proc.eglDestroyImageKHR(egl.display, attachment->tex->image);
 }
 
 bool CDRMRenderer::verifyDestinationDMABUF(const SDMABUFAttrs& attrs) {
@@ -1094,7 +1099,7 @@ bool CDRMRenderer::verifyDestinationDMABUF(const SDMABUFAttrs& attrs) {
 }
 
 CDRMRendererBufferAttachment::CDRMRendererBufferAttachment(Hyprutils::Memory::CWeakPointer<CDRMRenderer> renderer_, Hyprutils::Memory::CSharedPointer<IBuffer> buffer,
-                                                           EGLImageKHR image, GLuint fbo_, GLuint rbo_, SGLTex tex_, std::vector<uint8_t> intermediateBuf_) :
-    eglImage(image), fbo(fbo_), rbo(rbo_), tex(tex_), intermediateBuf(intermediateBuf_), renderer(renderer_) {
+                                                           EGLImageKHR image, GLuint fbo_, GLuint rbo_, SP<SGLTex> tex, std::vector<uint8_t> intermediateBuf_) :
+    eglImage(image), fbo(fbo_), rbo(rbo_), tex(tex), intermediateBuf(intermediateBuf_), renderer(renderer_) {
     bufferDestroy = buffer->events.destroy.registerListener([this](std::any d) { renderer->onBufferAttachmentDrop(this); });
 }

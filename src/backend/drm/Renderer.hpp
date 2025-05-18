@@ -19,15 +19,16 @@ namespace Aquamarine {
     class CGBMAllocator;
 
     struct SGLTex {
-        EGLImage image  = nullptr;
-        GLuint   texid  = 0;
-        GLuint   target = GL_TEXTURE_2D;
+        EGLImage image           = nullptr;
+        GLuint   texid           = 0;
+        GLuint   target          = GL_TEXTURE_2D;
+        bool     needsAllocation = true;
     };
 
     class CDRMRendererBufferAttachment : public IAttachment {
       public:
         CDRMRendererBufferAttachment(Hyprutils::Memory::CWeakPointer<CDRMRenderer> renderer_, Hyprutils::Memory::CSharedPointer<IBuffer> buffer, EGLImageKHR image, GLuint fbo_,
-                                     GLuint rbo_, SGLTex tex, std::vector<uint8_t> intermediateBuf_);
+                                     GLuint rbo_, Hyprutils::Memory::CSharedPointer<SGLTex> tex, std::vector<uint8_t> intermediateBuf_);
         virtual ~CDRMRendererBufferAttachment() {
             if (pbo)
                 glDeleteBuffers(1, &pbo);
@@ -39,7 +40,7 @@ namespace Aquamarine {
 
         EGLImageKHR                                   eglImage = nullptr;
         GLuint                                        fbo = 0, rbo = 0, pbo = 0;
-        SGLTex                                        tex;
+        Hyprutils::Memory::CSharedPointer<SGLTex>     tex;
         Hyprutils::Signal::CHyprSignalListener        bufferDestroy;
         std::vector<uint8_t>                          intermediateBuf;
 
@@ -184,7 +185,7 @@ namespace Aquamarine {
             int        lastBlitSyncFD = -1;
         } egl;
 
-        SGLTex                                        glTex(Hyprutils::Memory::CSharedPointer<IBuffer> buf);
+        Hyprutils::Memory::CSharedPointer<SGLTex>     glTex(Hyprutils::Memory::CSharedPointer<IBuffer> buf);
         void                                          readBuffer(Hyprutils::Memory::CSharedPointer<IBuffer> buf, std::span<uint8_t> out);
 
         Hyprutils::Memory::CWeakPointer<CDRMRenderer> self;
